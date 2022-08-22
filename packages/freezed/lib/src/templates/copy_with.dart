@@ -1,6 +1,5 @@
 import 'package:freezed/src/templates/parameter_template.dart';
 import 'package:freezed/src/templates/properties.dart';
-import 'package:freezed/src/utils.dart';
 
 import '../models.dart';
 
@@ -52,9 +51,7 @@ ${_abstractDeepCopyMethods().join()}
     return parent != null && parent!.allProperties.isNotEmpty;
   }
 
-  String commonContreteImpl(
-    List<Property> commonProperties,
-  ) {
+  String get commonContreteImpl {
     var copyWith = '';
 
     if (allProperties.isNotEmpty) {
@@ -66,7 +63,7 @@ ${_abstractDeepCopyMethods().join()}
       final body = _copyWithMethodBody(
         parametersTemplate: ParametersTemplate(
           const [],
-          namedParameters: commonProperties.map((e) {
+          namedParameters: allProperties.map((e) {
             return Parameter(
               decorators: e.decorators,
               name: e.name,
@@ -78,11 +75,12 @@ ${_abstractDeepCopyMethods().join()}
               showDefaultValue: false,
               isRequired: false,
               defaultValueSource: '',
-              type: e.type,
+              type: e.commonSupertype ?? e.type,
               doc: e.doc,
               isPossiblyDartCollection: e.isPossiblyDartCollection,
-              isCommonWithDifferentNullability:
-                  e.isCommonWithDifferentNullability,
+              commonSupertype: e.commonSupertype,
+              commonSubtype: e.commonSubtype,
+              parameterElement: null,
             );
           }).toList(),
         ),
@@ -136,11 +134,9 @@ ${_deepCopyMethods().join()}
     required List<Property> properties,
   }) {
     final parameters = properties.map((p) {
-      final type = p.isCommonWithDifferentNullability
-          ? typeStringWithoutNullability(p.type)
-          : p.type;
+      final type = p.commonSubtype ?? p.type;
 
-      return '${p.decorators.join()} $type ${p.name}';
+      return '${p.decorators.join()} covariant $type ${p.name}';
     }).join(',');
 
     return _maybeOverride('''
@@ -204,12 +200,11 @@ $s''';
           data.makeCollectionsImmutable) {
         propertyName = '_$propertyName';
       }
-      final type = p.isCommonWithDifferentNullability
-          ? typeStringWithoutNullability(p.type)
-          : p.type;
+
       var ternary = '${p.name} == freezed ? $accessor.$propertyName ';
 
-      if (p.isCommonWithDifferentNullability) {
+      final type = p.commonSubtype ?? p.type;
+      if (p.commonSubtype != null && p.type != p.commonSubtype) {
         ternary += 'as $type ';
       }
 
@@ -245,9 +240,7 @@ $constructorParameters
     required String methodName,
   }) {
     final parameters = properties.map((p) {
-      final type = p.isCommonWithDifferentNullability ? 'Object' : 'Object?';
-
-      return '$type ${p.name} = freezed,';
+      return 'Object? ${p.name} = freezed,';
     }).join();
 
     return '\$Res $methodName({$parameters})';

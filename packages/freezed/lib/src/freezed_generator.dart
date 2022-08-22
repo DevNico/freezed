@@ -128,29 +128,9 @@ class FreezedGenerator extends ParserGenerator<GlobalData, Data, Freezed> {
   List<Property> _commonProperties(
     List<ConstructorDetails> constructorsNeedsGeneration,
   ) {
-    final commonParameters =
-        _commonParametersBetweenAllConstructors(constructorsNeedsGeneration);
-
-    return [
-      for (final commonParameter in commonParameters)
-        Property(
-          decorators: commonParameter.decorators,
-          name: commonParameter.name,
-          isFinal: commonParameter.isFinal,
-          doc: commonParameter.doc,
-          type: commonParameter.type,
-          defaultValueSource: commonParameter.defaultValueSource,
-          isNullable: commonParameter.isNullable,
-          isDartList: commonParameter.isDartList,
-          isDartMap: commonParameter.isDartMap,
-          isDartSet: commonParameter.isDartSet,
-          isPossiblyDartCollection: commonParameter.isPossiblyDartCollection,
-          // TODO: support hasJsonKey
-          hasJsonKey: false,
-          isCommonWithDifferentNullability:
-              commonParameter.isCommonWithDifferentNullability,
-        ),
-    ];
+    return _commonPropertiesBetweenAllConstructors(constructorsNeedsGeneration)
+        .map(Property.fromParameter)
+        .toList();
   }
 
   void _assertValidClassUsage(ClassElement element) {
@@ -249,39 +229,88 @@ Read here: https://github.com/rrousselGit/freezed/blob/master/packages/freezed/C
     return false;
   }
 
-  List<Parameter> _commonParametersBetweenAllConstructors(
+  List<Parameter> _commonPropertiesBetweenAllConstructors(
     List<ConstructorDetails> constructorsNeedsGeneration,
   ) {
     return constructorsNeedsGeneration.first.parameters.allParameters
         .map((parameter) {
-          var anyMatchingPropertyIsFinal = false;
-          var anyMatchingPropertyIsNullable = false;
+          final library = parameter.parameterElement!.library!;
 
-          for (final constructor in constructorsNeedsGeneration) {
-            final matchingParameter =
-                constructor.parameters.allParameters.firstWhereOrNull((p) {
-              return p.name == parameter.name &&
-                  typeStringWithoutNullability(p.type) ==
-                      typeStringWithoutNullability(parameter.type);
-            });
-
-            if (matchingParameter == null) return null;
-            if (matchingParameter.isFinal) anyMatchingPropertyIsFinal = true;
-            if (matchingParameter.isNullable)
-              anyMatchingPropertyIsNullable = true;
+          String typeString(DartType type, {bool withNullability = true}) {
+            return resolveFullTypeStringFrom(
+              library,
+              type,
+              withNullability: withNullability,
+            );
           }
 
-          final isNullable =
-              parameter.isNullable || anyMatchingPropertyIsNullable;
+          var anyMatchingPropertyIsFinal = false;
+
+          var commonSupertypeDartType = parameter.parameterElement!.type;
+          var commonSubTypeDartType = parameter.parameterElement?.type;
+
+          String? commonSupertypeString;
+          String? commonSubtypeString;
+
+          for (final constructor in constructorsNeedsGeneration.skip(1)) {
+            final matchingParameter = constructor.parameters.allParameters
+                .firstWhereOrNull((p) => p.name == parameter.name);
+
+            if (matchingParameter == null) return null;
+
+            final matchingParameterType =
+                matchingParameter.parameterElement!.type;
+            if (matchingParameter.isFinal) anyMatchingPropertyIsFinal = true;
+
+            if (commonSupertypeDartType is FunctionType ||
+                commonSupertypeDartType.isDynamic) {
+              // If the type is a typedef, by finding the upper bound we would lose
+              // the initial definition. Therefore FunctionTypes are currently not
+              // supported for finding in finding common super types.
+              // => Resort back to type string matching.
+              commonSupertypeString ??= parameter.type!;
+              if (commonSupertypeString.contains('dynamic')) return null;
+
+              if (!typeStringsEqualIgnoringNullability(
+                  commonSupertypeString, matchingParameter.type!)) {
+                return null;
+              }
+
+              if (commonSupertypeDartType.isNullable !=
+                  matchingParameterType.isNullable) {
+                commonSupertypeString =
+                    typeStringWithNullability(commonSupertypeString);
+                commonSubtypeString =
+                    typeStringWithoutNullability(commonSupertypeString);
+              }
+            } else {
+              commonSupertypeDartType = library.typeSystem.leastUpperBound(
+                commonSupertypeDartType,
+                matchingParameterType,
+              );
+
+              if (commonSupertypeDartType
+                  .getDisplayString(withNullability: true)
+                  .contains('dynamic')) return null;
+
+              if (commonSubTypeDartType != null) {
+                if (library.typeSystem.isSubtypeOf(
+                    matchingParameterType, commonSubTypeDartType)) {
+                  commonSubTypeDartType = matchingParameterType;
+                } else if (!library.typeSystem.isSubtypeOf(
+                    commonSubTypeDartType, matchingParameterType)) {
+                  commonSubTypeDartType = null;
+                }
+              }
+            }
+          }
 
           return parameter.copyWith(
             isFinal: parameter.isFinal || anyMatchingPropertyIsFinal,
-            isNullable: isNullable,
-            type: isNullable && (parameter.type?.endsWith('?') == false)
-                ? '${parameter.type}?'
-                : parameter.type,
-            isCommonWithDifferentNullability:
-                parameter.isNullable != isNullable,
+            commonSupertype:
+                commonSupertypeString ?? typeString(commonSupertypeDartType),
+            commonSubtype:
+                commonSubtypeString ?? commonSubTypeDartType?.let(typeString),
           );
         })
         .whereNotNull()
@@ -326,7 +355,7 @@ Read here: https://github.com/rrousselGit/freezed/blob/master/packages/freezed/C
           escapedName: _escapedName(element, constructor),
           impliedProperties: [
             for (final parameter in constructor.parameters)
-              await Property.fromParameter(
+              await Property.fromParameterElement(
                 parameter,
                 buildStep,
                 addImplicitFinal: options.addImplicitFinal,
@@ -610,6 +639,8 @@ Read here: https://github.com/rrousselGit/freezed/blob/master/packages/freezed/C
     }
 
     final commonProperties = _commonProperties(data.constructors);
+    final commonCopyableProperties =
+        commonProperties.where((p) => p.isCopyable).toList();
 
     final commonCopyWith = !data.generateCopyWith
         ? null
@@ -617,11 +648,11 @@ Read here: https://github.com/rrousselGit/freezed/blob/master/packages/freezed/C
             clonedClassName: data.name,
             cloneableProperties: _commonCloneableProperties(
               data.constructors,
-              commonProperties,
+              commonCopyableProperties,
             ).toList(),
             genericsDefinition: data.genericsDefinitionTemplate,
             genericsParameter: data.genericsParameterTemplate,
-            allProperties: commonProperties,
+            allProperties: commonCopyableProperties,
             data: data,
           );
 
@@ -843,4 +874,13 @@ String? parseLateGetterSource(String source) {
     }
   }
   return null;
+}
+
+extension Let<T> on T {
+  @pragma('vm:prefer-inline')
+  R let<R>(R Function(T) f) => f(this);
+}
+
+extension on DartType {
+  bool get isNullable => nullabilitySuffix == NullabilitySuffix.question;
 }

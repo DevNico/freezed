@@ -2,6 +2,7 @@ import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:build/build.dart';
+import 'package:freezed/src/templates/parameter_template.dart';
 import 'package:source_gen/source_gen.dart';
 
 import '../utils.dart';
@@ -31,10 +32,30 @@ class Property {
     required this.isDartMap,
     required this.isDartSet,
     required this.isPossiblyDartCollection,
-    required this.isCommonWithDifferentNullability,
+    required this.commonSupertype,
+    required this.commonSubtype,
   }) : type = type ?? 'dynamic';
 
-  static Future<Property> fromParameter(
+  Property.fromParameter(Parameter p)
+      : this(
+          decorators: p.decorators,
+          name: p.name,
+          isFinal: p.isFinal,
+          doc: p.doc,
+          type: p.type,
+          defaultValueSource: p.defaultValueSource,
+          isNullable: p.isNullable,
+          isDartList: p.isDartList,
+          isDartMap: p.isDartMap,
+          isDartSet: p.isDartSet,
+          isPossiblyDartCollection: p.isPossiblyDartCollection,
+          // TODO: support hasJsonKey
+          hasJsonKey: false,
+          commonSupertype: p.commonSupertype,
+          commonSubtype: p.commonSubtype,
+        );
+
+  static Future<Property> fromParameterElement(
     ParameterElement element,
     BuildStep buildStep, {
     required bool addImplicitFinal,
@@ -61,7 +82,8 @@ class Property {
       defaultValueSource: defaultValue,
       hasJsonKey: element.hasJsonKey,
       isPossiblyDartCollection: element.type.isPossiblyDartCollection,
-      isCommonWithDifferentNullability: false,
+      commonSupertype: null,
+      commonSubtype: null,
     );
   }
 
@@ -77,7 +99,10 @@ class Property {
   final bool hasJsonKey;
   final String doc;
   final bool isPossiblyDartCollection;
-  final bool isCommonWithDifferentNullability;
+  final String? commonSupertype;
+  final String? commonSubtype;
+
+  bool get isCopyable => commonSupertype == commonSubtype;
 
   @override
   String toString() {
@@ -87,7 +112,7 @@ class Property {
 
   Getter get unimplementedGetter => Getter(
         name: name,
-        type: type,
+        type: commonSupertype ?? type,
         decorators: decorators,
         doc: doc,
         body: ' => throw $privConstUsedErrorVarName;',
@@ -111,7 +136,7 @@ class Property {
 
   Setter get unimplementedSetter => Setter(
         name: name,
-        type: type,
+        type: commonSubtype ?? type,
         decorators: decorators,
         doc: doc,
         body: ' => throw $privConstUsedErrorVarName;',
@@ -138,7 +163,9 @@ class Property {
     bool? hasJsonKey,
     String? doc,
     bool? isPossiblyDartCollection,
-    bool? isCommonWithDifferentNullability,
+    String? commonSupertype,
+    String? commonSubtype,
+    ParameterElement? parameterElement,
   }) {
     return Property(
       type: type ?? this.type,
@@ -154,13 +181,17 @@ class Property {
       isDartSet: isDartSet ?? this.isDartSet,
       isPossiblyDartCollection:
           isPossiblyDartCollection ?? this.isPossiblyDartCollection,
-      isCommonWithDifferentNullability: isCommonWithDifferentNullability ??
-          this.isCommonWithDifferentNullability,
+      commonSupertype: commonSupertype ?? this.commonSupertype,
+      commonSubtype: commonSubtype ?? this.commonSubtype,
     );
   }
 }
 
-class Getter {
+class ClassMember {
+  const ClassMember();
+}
+
+class Getter implements ClassMember {
   Getter({
     required String? type,
     required this.name,
@@ -181,7 +212,7 @@ class Getter {
   }
 }
 
-class Setter {
+class Setter implements ClassMember {
   Setter({
     required String? type,
     required this.name,

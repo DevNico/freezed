@@ -18,10 +18,19 @@ class Abstract {
   @override
   String toString() {
     final abstractProperties = commonProperties
-        .expand((e) => [
-              e.unimplementedGetter,
-              if (!e.isFinal) e.unimplementedSetter,
-            ])
+        .expand((e) {
+          return <ClassMember?>[
+            e.unimplementedGetter,
+            if (!e.isFinal &&
+                // Don't add a setter for a field where the setters type is not
+                // a subtype of the getters type.
+                !(e.commonSupertype != null &&
+                    e.commonSubtype != e.commonSupertype))
+              e.unimplementedSetter,
+          ];
+        })
+        .whereType<ClassMember>()
+        .map((e) => e.toString())
         .join();
 
     return '''
@@ -41,7 +50,7 @@ ${copyWith?.abstractCopyWithGetter ?? ''}
 
 ${copyWith?.interface ?? ''}
 
-${copyWith?.commonContreteImpl(commonProperties) ?? ''}
+${copyWith?.commonContreteImpl ?? ''}
 ''';
   }
 
